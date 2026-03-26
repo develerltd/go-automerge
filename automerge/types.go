@@ -4,18 +4,20 @@ import t "github.com/develerltd/go-automerge/internal/types"
 
 // Re-export core types from internal/types.
 type (
-	ActorId    = t.ActorId
-	OpId       = t.OpId
-	ObjId      = t.ObjId
-	ElemId     = t.ElemId
-	ChangeHash = t.ChangeHash
-	ExId       = t.ExId
-	ObjType    = t.ObjType
-	PropKind   = t.PropKind
-	Prop       = t.Prop
-	ScalarType = t.ScalarType
-	ScalarValue = t.ScalarValue
-	Value      = t.Value
+	ActorId      = t.ActorId
+	OpId         = t.OpId
+	ObjId        = t.ObjId
+	ElemId       = t.ElemId
+	ChangeHash   = t.ChangeHash
+	ExId         = t.ExId
+	ObjType      = t.ObjType
+	PropKind     = t.PropKind
+	Prop         = t.Prop
+	ScalarType   = t.ScalarType
+	ScalarValue  = t.ScalarValue
+	Value        = t.Value
+	HydrateKind  = t.HydrateKind
+	HydrateValue = t.HydrateValue
 )
 
 // Re-export constants and constructors.
@@ -45,6 +47,10 @@ const (
 	ScalarTypeBytes     = t.ScalarTypeBytes
 	ScalarTypeCounter   = t.ScalarTypeCounter
 	ScalarTypeTimestamp  = t.ScalarTypeTimestamp
+	HydrateScalar = t.HydrateScalar
+	HydrateMap    = t.HydrateMap
+	HydrateList   = t.HydrateList
+	HydrateText   = t.HydrateText
 )
 
 // Re-export value constructors.
@@ -59,6 +65,10 @@ var (
 	NewCounter       = t.NewCounter
 	NewTimestamp      = t.NewTimestamp
 	NewUnknownScalar = t.NewUnknownScalar
-	NewObjectValue   = t.NewObjectValue
-	NewScalarValue   = t.NewScalarValue
+	NewObjectValue    = t.NewObjectValue
+	NewScalarValue    = t.NewScalarValue
+	NewHydrateScalar  = t.NewHydrateScalar
+	NewHydrateMap     = t.NewHydrateMap
+	NewHydrateList    = t.NewHydrateList
+	NewHydrateText    = t.NewHydrateText
 )

@@ -13,7 +13,7 @@ permissions:
 
 env:
   UPSTREAM_REPO: https://github.com/automerge/automerge.git
-  UPSTREAM_COMMIT: 52b40fa5f191e7e077075b25b2436096cc23cec6
+  UPSTREAM_COMMIT: 8246d0f8218cd49dc1af56ba6eefd88ed215665c
 
 jobs:
   cross-impl:

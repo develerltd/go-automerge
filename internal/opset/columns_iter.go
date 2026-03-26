@@ -190,16 +190,115 @@ func (it *OpIter) Next() (*Op, bool) {
 }
 
 // Get materializes a single operation at the given index.
-// Returns nil if the index is out of bounds.
+// Uses per-column Get() calls with DecodeAt fast paths instead of creating
+// a full IterRange with 16 column iterators + slab decoding.
 func (c *OpColumns) Get(index int) *Op {
 	if index < 0 || index >= c.Len() {
 		return nil
 	}
-	it := c.IterRange(index, index+1)
-	op, ok := it.Next()
-	if !ok {
-		return nil
+
+	op := &Op{}
+
+	// Op ID
+	if v, ok := c.IDActor.Get(index); ok && v != nil {
+		op.ID.ActorIdx = uint32(*v)
 	}
+	if v, ok := c.IDCtr.Get(index); ok && v != nil {
+		op.ID.Counter = uint64(*v)
+	}
+
+	// Object (nil = root)
+	objActorVal, _ := c.ObjActor.Get(index)
+	objCtrVal, _ := c.ObjCtr.Get(index)
+	if objActorVal == nil && objCtrVal == nil {
+		op.Obj = types.Root
+	} else {
+		var actor uint32
+		var ctr uint64
+		if objActorVal != nil {
+			actor = uint32(*objActorVal)
+		}
+		if objCtrVal != nil {
+			ctr = *objCtrVal
+		}
+		op.Obj = types.ObjId{OpId: types.OpId{Counter: ctr, ActorIdx: actor}}
+	}
+
+	// Key
+	keyStrVal, _ := c.KeyStr.Get(index)
+	keyActorVal, _ := c.KeyActor.Get(index)
+	keyCtrVal, _ := c.KeyCtr.Get(index)
+	if keyStrVal != nil && *keyStrVal != "" {
+		op.Key = Key{Kind: KeyMap, MapKey: *keyStrVal}
+	} else if keyActorVal != nil || keyCtrVal != nil {
+		var actor uint32
+		var ctr uint64
+		if keyActorVal != nil {
+			actor = uint32(*keyActorVal)
+		}
+		if keyCtrVal != nil {
+			ctr = uint64(*keyCtrVal)
+		}
+		op.Key = Key{Kind: KeySeq, ElemID: types.OpId{Counter: ctr, ActorIdx: actor}}
+	} else {
+		op.Key = Key{Kind: KeySeq, ElemID: types.Head.OpId}
+	}
+
+	// Insert
+	if v, ok := c.Insert.Get(index); ok && v != nil {
+		op.Insert = *v
+	}
+
+	// Action
+	if v, ok := c.Action.Get(index); ok && v != nil {
+		op.Action = Action(*v)
+	}
+
+	// Value: use GetWithAcc for byte offset, then read value bytes
+	valueMeta, valueAcc, vok := c.ValueMeta.GetWithAcc(index)
+	if vok && valueMeta != nil {
+		meta := *valueMeta
+		byteLen := int(meta >> 4)
+		var rawBytes []byte
+		if byteLen > 0 {
+			valueOffset := valueAcc.AsInt()
+			rawBytes = make([]byte, 0, byteLen)
+			for j := 0; j < byteLen; j++ {
+				b, ok := c.Value.Get(valueOffset + j)
+				if ok && b != nil {
+					rawBytes = append(rawBytes, (*b)...)
+				}
+			}
+		}
+		op.Value = decodeValueFromMeta(meta, rawBytes)
+	}
+
+	// Successors: use GetWithAcc for record offset
+	succCount, succAcc, sok := c.SuccCount.GetWithAcc(index)
+	if sok && succCount != nil && *succCount > 0 {
+		count := int(*succCount)
+		succOffset := succAcc.AsInt()
+		op.Succ = make([]types.OpId, count)
+		for j := 0; j < count; j++ {
+			sa, _ := c.SuccActor.Get(succOffset + j)
+			sc, _ := c.SuccCtr.Get(succOffset + j)
+			if sa != nil {
+				op.Succ[j].ActorIdx = uint32(*sa)
+			}
+			if sc != nil {
+				op.Succ[j].Counter = uint64(*sc)
+			}
+		}
+	}
+
+	// Mark info
+	if v, ok := c.MarkName.Get(index); ok && v != nil {
+		op.MarkName = *v
+	}
+	if v, ok := c.Expand.Get(index); ok && v != nil {
+		op.Expand = *v
+	}
+
 	return op
 }
 
@@ -216,6 +315,56 @@ func (c *OpColumns) MaterializeRange(start, end int) []Op {
 			break
 		}
 		ops = append(ops, *op)
+	}
+	return ops
+}
+
+// VisibleOpsInRange returns only visible ops in [start, end) by scanning
+// SuccCount using run-based iteration to skip large blocks of non-visible ops,
+// then materializing only those with SuccCount==0 and Action!=Delete.
+//
+// For the common case where most ops are superseded (e.g. repeated updates to
+// the same key), this is O(num_runs) instead of O(range_size).
+func (c *OpColumns) VisibleOpsInRange(start, end int) []Op {
+	if start >= end {
+		return nil
+	}
+
+	// Scan SuccCount using NextRun() to skip entire runs of non-visible ops.
+	// For repeatedPut(n), SuccCount has ~1 run of (n-1) ones and 1 zero,
+	// so this completes in O(1) instead of O(n).
+	succIt := c.SuccCount.IterRange(start, end)
+	var candidatePositions []int
+	pos := start
+	for {
+		run := succIt.NextRun()
+		if run == nil {
+			break
+		}
+		if run.Value == nil || *run.Value == 0 {
+			// SuccCount == 0: these positions are visibility candidates
+			for i := 0; i < run.Count; i++ {
+				candidatePositions = append(candidatePositions, pos+i)
+			}
+		}
+		pos += run.Count
+	}
+
+	if len(candidatePositions) == 0 {
+		return nil
+	}
+
+	// Filter by Action != Delete, then materialize only visible ops
+	ops := make([]Op, 0, len(candidatePositions))
+	for _, p := range candidatePositions {
+		act, _ := c.Action.Get(p)
+		if act != nil && Action(*act) == ActionDelete {
+			continue
+		}
+		op := c.Get(p)
+		if op != nil {
+			ops = append(ops, *op)
+		}
 	}
 	return ops
 }

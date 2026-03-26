@@ -108,7 +108,7 @@ fn gen_list_operations(out: &Path) {
     doc.insert(&list, 1, "X").unwrap();
     commit(&mut doc, "insert X", 3000);
 
-    doc.splice(&list, 2, 2, ["Y", "Z"].into_iter().map(|s| s.into()))
+    doc.splice(&list, 2, 2, ["Y", "Z"].into_iter().map(|s| automerge::hydrate::Value::from(s)))
         .unwrap();
     commit(&mut doc, "splice", 4000);
 

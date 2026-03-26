@@ -29,9 +29,29 @@ type CursorOps[T any] struct {
 	// Returns *T pointers (nil for null values).
 	DecodeAll func(slab *Slab) []*T
 
+	// DecodeFirst decodes only the first value from a slab.
+	// Returns nil if the slab is empty or the first value is null.
+	// Much cheaper than DecodeAll when only the first value is needed.
+	DecodeFirst func(slab *Slab) *T
+
+	// DecodeAt decodes the value at a specific offset within a slab.
+	// Walks runs until the target offset without allocating decode buffers.
+	// Returns nil if the offset is out of range or the value is null.
+	DecodeAt func(slab *Slab, offset int) *T
+
+	// IsAllNull checks if a slab contains only null values.
+	// Returns false if not implemented or if the slab has non-null values.
+	IsAllNull func(slab *Slab) bool
+
 	// EqualValue compares two value pointers for equality.
 	// Both may be nil (null values). Two nils are equal.
 	EqualValue func(a, b *T) bool
+
+	// CompareValue compares two value pointers for ordering.
+	// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+	// nil (null) is less than any non-nil value. Two nils are equal.
+	// May be nil for types that don't support ordering (e.g. strings, bytes).
+	CompareValue func(a, b *T) int
 
 	// SlabSize is the target byte size for slab splitting.
 	SlabSize int
@@ -76,6 +96,13 @@ func UIntCursorOps() CursorOps[uint64] {
 		DecodeAll: func(slab *Slab) []*uint64 {
 			return rleDecodeAll(slab, packer)
 		},
+		DecodeFirst: func(slab *Slab) *uint64 {
+			return rleDecodeFirst(slab, packer)
+		},
+		DecodeAt: func(slab *Slab, offset int) *uint64 {
+			return rleDecodeAt(slab, offset, packer)
+		},
+		IsAllNull: rleIsAllNull,
 		EqualValue: func(a, b *uint64) bool {
 			if a == nil && b == nil {
 				return true
@@ -84,6 +111,24 @@ func UIntCursorOps() CursorOps[uint64] {
 				return false
 			}
 			return *a == *b
+		},
+		CompareValue: func(a, b *uint64) int {
+			if a == nil && b == nil {
+				return 0
+			}
+			if a == nil {
+				return -1
+			}
+			if b == nil {
+				return 1
+			}
+			if *a < *b {
+				return -1
+			}
+			if *a > *b {
+				return 1
+			}
+			return 0
 		},
 		SlabSize: RleSlabSize,
 		Packer:   packer,
@@ -117,6 +162,13 @@ func IntCursorOps() CursorOps[int64] {
 		DecodeAll: func(slab *Slab) []*int64 {
 			return rleDecodeAll(slab, packer)
 		},
+		DecodeFirst: func(slab *Slab) *int64 {
+			return rleDecodeFirst(slab, packer)
+		},
+		DecodeAt: func(slab *Slab, offset int) *int64 {
+			return rleDecodeAt(slab, offset, packer)
+		},
+		IsAllNull: rleIsAllNull,
 		EqualValue: func(a, b *int64) bool {
 			if a == nil && b == nil {
 				return true
@@ -125,6 +177,24 @@ func IntCursorOps() CursorOps[int64] {
 				return false
 			}
 			return *a == *b
+		},
+		CompareValue: func(a, b *int64) int {
+			if a == nil && b == nil {
+				return 0
+			}
+			if a == nil {
+				return -1
+			}
+			if b == nil {
+				return 1
+			}
+			if *a < *b {
+				return -1
+			}
+			if *a > *b {
+				return 1
+			}
+			return 0
 		},
 		SlabSize: RleSlabSize,
 		Packer:   packer,
@@ -157,6 +227,12 @@ func DeltaCursorOps() CursorOps[int64] {
 		DecodeAll: func(slab *Slab) []*int64 {
 			return deltaDecodeAllAbsolute(slab)
 		},
+		DecodeFirst: func(slab *Slab) *int64 {
+			return deltaDecodeFirst(slab)
+		},
+		DecodeAt: func(slab *Slab, offset int) *int64 {
+			return deltaDecodeAt(slab, offset)
+		},
 		EqualValue: func(a, b *int64) bool {
 			if a == nil && b == nil {
 				return true
@@ -165,6 +241,24 @@ func DeltaCursorOps() CursorOps[int64] {
 				return false
 			}
 			return *a == *b
+		},
+		CompareValue: func(a, b *int64) int {
+			if a == nil && b == nil {
+				return 0
+			}
+			if a == nil {
+				return -1
+			}
+			if b == nil {
+				return 1
+			}
+			if *a < *b {
+				return -1
+			}
+			if *a > *b {
+				return 1
+			}
+			return 0
 		},
 		SlabSize: DeltaSlabSize,
 		Packer:   packer,
@@ -202,6 +296,12 @@ func BoolCursorOps() CursorOps[bool] {
 				result[i] = &v
 			}
 			return result
+		},
+		DecodeFirst: func(slab *Slab) *bool {
+			return boolDecodeAt(slab, 0)
+		},
+		DecodeAt: func(slab *Slab, offset int) *bool {
+			return boolDecodeAt(slab, offset)
 		},
 		EqualValue: func(a, b *bool) bool {
 			if a == nil && b == nil {
@@ -244,6 +344,13 @@ func StrCursorOps() CursorOps[string] {
 		DecodeAll: func(slab *Slab) []*string {
 			return rleDecodeAll(slab, packer)
 		},
+		DecodeFirst: func(slab *Slab) *string {
+			return rleDecodeFirst(slab, packer)
+		},
+		DecodeAt: func(slab *Slab, offset int) *string {
+			return rleDecodeAt(slab, offset, packer)
+		},
+		IsAllNull: rleIsAllNull,
 		EqualValue: func(a, b *string) bool {
 			if a == nil && b == nil {
 				return true
@@ -370,6 +477,14 @@ func RawCursorOps() CursorOps[[]byte] {
 				result[i] = &b
 			}
 			return result
+		},
+		DecodeAt: func(slab *Slab, offset int) *[]byte {
+			data := slab.Bytes()
+			if offset < 0 || offset >= len(data) {
+				return nil
+			}
+			b := []byte{data[offset]}
+			return &b
 		},
 		EqualValue: func(a, b *[]byte) bool {
 			if a == nil && b == nil {

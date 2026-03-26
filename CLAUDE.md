@@ -6,13 +6,13 @@ Binary-compatible with the Rust implementation -- documents produced by either c
 ## Upstream Tracking
 
 - **Upstream repo:** https://github.com/automerge/automerge
-- **Tracked commit:** `52b40fa5f191e7e077075b25b2436096cc23cec6`
-- **Tracked version:** `automerge 0.7.4`
-- **Go module version:** `v0.7.4`
+- **Tracked commit:** `8246d0f8218cd49dc1af56ba6eefd88ed215665c`
+- **Tracked version:** `automerge 0.8.0`
+- **Go module version:** `v0.8.0`
 
 To check for upstream changes since last sync:
 ```bash
-git -C /path/to/automerge log --oneline 52b40fa5f..HEAD -- rust/automerge/ rust/hexane/
+git -C /path/to/automerge log --oneline 8246d0f82..HEAD -- rust/automerge/ rust/hexane/
 ```
 
 ## Architecture Mapping

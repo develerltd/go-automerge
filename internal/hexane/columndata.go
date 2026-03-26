@@ -130,10 +130,26 @@ func (c *ColumnData[T]) Slabs() *SpanTree[Slab, SlabWeight] { return c.slabs }
 
 // Get returns the value at index, or nil if out of bounds or null.
 // The outer bool indicates whether the index was valid.
+// When DecodeAt is available, uses zero-alloc slab-level decode instead of
+// creating a full iterator with decode buffers.
 func (c *ColumnData[T]) Get(index int) (*T, bool) {
 	if index < 0 || index >= c.len {
 		return nil, false
 	}
+
+	// Fast path: use DecodeAt to decode only the target value
+	if c.ops.DecodeAt != nil {
+		cursor := c.slabs.GetWhereOrLast(func(accW, nextW SlabWeight) bool {
+			return index < accW.Pos+nextW.Pos
+		})
+		if cursor == nil {
+			return nil, false
+		}
+		offset := index - cursor.Weight.Pos
+		return c.ops.DecodeAt(cursor.Element, offset), true
+	}
+
+	// Fallback: create iterator
 	it := c.IterRange(index, index+1)
 	val, ok := it.Next()
 	if !ok {
@@ -265,7 +281,9 @@ func (c *ColumnData[T]) Extend(values []T) Acc {
 // SpliceNullable removes del items starting at index and inserts nullable values
 // (nil = null) in their place. Returns the accumulated Acc of the deleted items.
 //
-// This is slower than Splice (O(n) full re-encode) but handles null values correctly.
+// Uses slab-level operations: only the affected slab is decoded and re-encoded,
+// not the entire column. Falls back to full re-encode only when deletion spans
+// multiple slabs.
 func (c *ColumnData[T]) SpliceNullable(index, del int, values []*T) Acc {
 	if index > c.len {
 		panic("ColumnData.SpliceNullable: index out of bounds")
@@ -287,6 +305,132 @@ func (c *ColumnData[T]) SpliceNullable(index, del int, values []*T) Acc {
 		return c.Splice(index, del, nonNull)
 	}
 
+	// Fast path: inserting a single null with no deletion.
+	// Use the cursor-level Splice which has run-level optimizations,
+	// avoiding the O(n) DecodeAll for slabs with long runs.
+	if del == 0 && len(values) == 1 && values[0] == nil {
+		return c.spliceOneNull(index)
+	}
+
+	if len(values) == 0 && del == 0 {
+		return Acc{}
+	}
+
+	// Find target slab
+	cursor := c.slabs.GetWhereOrLast(func(accW, nextW SlabWeight) bool {
+		return index < accW.Pos+nextW.Pos
+	})
+	if cursor == nil {
+		panic("ColumnData.SpliceNullable: no slabs")
+	}
+
+	subindex := index - cursor.Weight.Pos
+	slabLen := cursor.Element.Len()
+
+	// If deletion spans beyond this slab, fall back to full re-encode
+	if del > slabLen-subindex {
+		return c.spliceNullableFull(index, del, values)
+	}
+
+	// Decode only the affected slab
+	decoded := c.ops.DecodeAll(cursor.Element)
+
+	// Compute deleted acc
+	var deletedAcc Acc
+	packer := c.ops.Packer
+	endDel := subindex + del
+	for i := subindex; i < endDel && i < len(decoded); i++ {
+		if decoded[i] != nil {
+			deletedAcc.AddAssignAgg(packer.ItemAgg(*decoded[i]))
+		}
+	}
+
+	// Build new decoded with splice applied
+	newDecoded := make([]*T, 0, len(decoded)-del+len(values))
+	newDecoded = append(newDecoded, decoded[:subindex]...)
+	newDecoded = append(newDecoded, values...)
+	if endDel < len(decoded) {
+		newDecoded = append(newDecoded, decoded[endDel:]...)
+	}
+
+	// Re-encode only this slab
+	enc := c.ops.NewEncoder(false)
+	for _, v := range newDecoded {
+		enc.Append(v)
+	}
+	enc.Flush()
+	newSlabs := enc.IntoSlabs(c.ops.ComputeMinMax)
+	if len(newSlabs) == 0 {
+		newSlabs = []Slab{{}}
+	}
+
+	// Replace old slab with new slab(s) in tree
+	c.slabs.Splice(cursor.Index, cursor.Index+1, newSlabs)
+	c.len = c.len - del + len(values)
+	c.counter++
+
+	return deletedAcc
+}
+
+// spliceOneNull inserts a single null value at index with no deletion.
+// Decodes runs (not items) from the slab and re-encodes with a null inserted,
+// avoiding O(n) for slabs with long runs.
+func (c *ColumnData[T]) spliceOneNull(index int) Acc {
+	// Find target slab
+	cursor := c.slabs.GetWhereOrLast(func(accW, nextW SlabWeight) bool {
+		return index < accW.Pos+nextW.Pos
+	})
+	if cursor == nil {
+		panic("ColumnData.spliceOneNull: no slabs")
+	}
+
+	subindex := index - cursor.Weight.Pos
+	slab := cursor.Element
+	slabLen := slab.Len()
+
+	// Fast path: if entire slab is null, re-encode as null run of count+1.
+	// Uses IsAllNull which verifies the slab's encoded data is a single null run.
+	if slabLen > 0 && c.ops.IsAllNull != nil && c.ops.IsAllNull(slab) {
+		enc := c.ops.NewEncoder(false)
+		enc.AppendChunk(Run[T]{Count: slabLen + 1, Value: nil})
+		enc.Flush()
+		newSlabs := enc.IntoSlabs(c.ops.ComputeMinMax)
+		if len(newSlabs) == 0 {
+			newSlabs = []Slab{{}}
+		}
+		c.slabs.Splice(cursor.Index, cursor.Index+1, newSlabs)
+		c.len++
+		c.counter++
+		return Acc{}
+	}
+
+	// General case: decode all items, splice null, re-encode
+	decoded := c.ops.DecodeAll(slab)
+	newDecoded := make([]*T, 0, len(decoded)+1)
+	newDecoded = append(newDecoded, decoded[:subindex]...)
+	newDecoded = append(newDecoded, nil)
+	if subindex < len(decoded) {
+		newDecoded = append(newDecoded, decoded[subindex:]...)
+	}
+
+	enc := c.ops.NewEncoder(false)
+	for _, v := range newDecoded {
+		enc.Append(v)
+	}
+	enc.Flush()
+	newSlabs := enc.IntoSlabs(c.ops.ComputeMinMax)
+	if len(newSlabs) == 0 {
+		newSlabs = []Slab{{}}
+	}
+	c.slabs.Splice(cursor.Index, cursor.Index+1, newSlabs)
+	c.len++
+	c.counter++
+	return Acc{}
+}
+
+// spliceNullableFull is the fallback for SpliceNullable when deletion spans
+// multiple slabs. Decodes the entire column, splices, and re-encodes.
+func (c *ColumnData[T]) spliceNullableFull(index, del int, values []*T) Acc {
 	// Compute acc of deleted items
 	var deletedAcc Acc
 	if del > 0 && index < c.len {
@@ -480,6 +624,20 @@ func (c *ColumnData[T]) IterRange(start, end int) *ColumnDataIter[T] {
 }
 
 // --- Search ---
+
+// ScopeToValue finds the contiguous range where value appears within [rangeStart, rangeEnd).
+// Values in the range must be sorted. Returns (start, end) of the matching sub-range.
+// Uses O(log n) binary search when the column type supports ordering.
+func (c *ColumnData[T]) ScopeToValue(value *T, rangeStart, rangeEnd int) (int, int) {
+	if rangeEnd > c.len {
+		rangeEnd = c.len
+	}
+	if rangeStart >= rangeEnd {
+		return rangeStart, rangeStart
+	}
+	it := c.IterRange(rangeStart, rangeEnd)
+	return it.SeekToValue(value, rangeStart, rangeEnd)
+}
 
 // FindByValue returns indices of items whose Agg value equals the given agg.
 // Uses slab-level min/max metadata to skip non-matching slabs.

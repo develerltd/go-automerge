@@ -10,46 +10,24 @@ import (
 
 // DecodeOps decodes operations from document-format columnar data.
 // In document chunks, ops have successors (succ) instead of predecessors (pred).
-// Uses LoadOpColumns to load directly into columnar storage, avoiding per-op decode/encode.
+// Loads columns transiently, then distributes ops into per-object B-trees.
 func DecodeOps(cols columnar.RawColumns, actors []types.ActorId) (*OpSet, error) {
 	opCols, err := LoadOpColumns(cols)
 	if err != nil {
 		return nil, fmt.Errorf("loading op columns: %w", err)
 	}
 
-	os := &OpSet{
-		Actors:    actors,
-		cols:      opCols,
-		objInfo:   make(map[types.OpId]ObjInfo),
-		objIndex:  make(map[types.OpId]objRange),
-		opIdToRow: make(map[types.OpId]int),
-	}
+	os := New()
+	os.Actors = actors
 
-	// Build indices by iterating the columns once
+	// Iterate columns once, distributing ops into per-object trees
 	it := opCols.Iter()
-	for i := 0; ; i++ {
+	for {
 		op, ok := it.Next()
 		if !ok {
 			break
 		}
-
-		if op.ID.Counter > os.MaxOp {
-			os.MaxOp = op.ID.Counter
-		}
-
-		objKey := op.Obj.OpId
-		if r, exists := os.objIndex[objKey]; exists {
-			r.end = i + 1
-			os.objIndex[objKey] = r
-		} else {
-			os.objIndex[objKey] = objRange{start: i, end: i + 1}
-		}
-
-		if op.Action.IsMake() {
-			os.objInfo[op.ID] = ObjInfo{Parent: op.Obj, ObjType: op.ObjType()}
-		}
-
-		os.opIdToRow[op.ID] = i
+		os.insertOp(*op)
 	}
 
 	return os, nil

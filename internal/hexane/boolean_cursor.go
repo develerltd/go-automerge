@@ -165,6 +165,25 @@ func boolDecodeAll(slab *Slab) []bool {
 	return result
 }
 
+// boolDecodeAt decodes the boolean value at a specific offset within a slab.
+// Boolean encoding uses alternating run-length starting with false.
+func boolDecodeAt(slab *Slab, offset int) *bool {
+	var state boolCursorState
+	data := slab.Bytes()
+	pos := 0
+	for {
+		run, err := boolNext(&state, data)
+		if err != nil || run == nil {
+			return nil
+		}
+		if pos+run.Count > offset {
+			v := *run.Value
+			return &v
+		}
+		pos += run.Count
+	}
+}
+
 // boolEncode encodes boolean values to bytes.
 func boolEncode(values []bool) []byte {
 	if len(values) == 0 {

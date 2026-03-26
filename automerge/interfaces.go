@@ -84,6 +84,19 @@ type Transactable interface {
 
 	// Mark creates a mark on a range of a text object.
 	Mark(obj ObjId, start, end uint64, expand ExpandMark, name string, value ScalarValue) error
+
+	// BatchCreateObject creates a nested object tree at the given property
+	// using batch insertion for efficiency. The value must be a map, list,
+	// or text HydrateValue.
+	BatchCreateObject(obj ObjId, prop Prop, value HydrateValue, insert bool) (ObjId, error)
+
+	// InitFromHydrate initializes the root map from a map of HydrateValues.
+	// Existing keys not in the map are left unchanged.
+	InitFromHydrate(value map[string]HydrateValue) error
+
+	// SpliceValues replaces del elements at pos with the given values,
+	// which can include nested objects (maps, lists, text).
+	SpliceValues(obj ObjId, pos, del uint64, vals ...HydrateValue) error
 }
 
 // Compile-time interface checks.

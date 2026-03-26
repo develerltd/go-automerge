@@ -182,9 +182,98 @@ func accForRun[T any](run *Run[T], packer Packer[T]) Acc {
 	return packer.ItemAgg(*run.Value).MulUint(run.Count)
 }
 
+// rleSpliceInsertOne handles the common case of inserting a single value with
+// no deletions. Works at the run level (O(num_runs)) instead of expanding all
+// items (O(num_items)), which avoids O(n) decode when a slab has a long run.
+func rleSpliceInsertOne[T any](slab *Slab, index int, value T, slabSize int, packer Packer[T], eq func(T, T) bool) SpliceResult {
+	// Collect runs from the slab
+	var cstate rleCursorState
+	data := slab.Bytes()
+	type runEntry struct {
+		run Run[T]
+	}
+	var runs []runEntry
+	pos := 0
+	insertRunIdx := -1
+	insertOffset := 0
+
+	for {
+		run, err := rleNext(&cstate, data, packer)
+		if err != nil || run == nil {
+			break
+		}
+		if insertRunIdx == -1 && pos+run.Count > index {
+			insertRunIdx = len(runs)
+			insertOffset = index - pos
+		}
+		runs = append(runs, runEntry{run: *run})
+		pos += run.Count
+	}
+
+	if insertRunIdx == -1 {
+		insertRunIdx = len(runs)
+		insertOffset = 0
+	}
+
+	// Re-encode with the new value inserted at the right position
+	state := NewRleState[T](eq)
+	writer := NewSlabWriter[T](packer, slabSize, false)
+
+	for i, re := range runs {
+		if i == insertRunIdx {
+			if re.run.Value != nil && eq(*re.run.Value, value) {
+				// Same value as the run — increment count
+				r := re.run
+				r.Count++
+				state.AppendChunk(writer, r)
+				continue
+			}
+			if insertOffset == 0 {
+				// Insert before this run
+				state.AppendChunk(writer, Run[T]{Count: 1, Value: &value})
+				state.AppendChunk(writer, re.run)
+			} else {
+				// Split the run
+				prefix := Run[T]{Count: insertOffset, Value: re.run.Value}
+				suffix := Run[T]{Count: re.run.Count - insertOffset, Value: re.run.Value}
+				state.AppendChunk(writer, prefix)
+				state.AppendChunk(writer, Run[T]{Count: 1, Value: &value})
+				state.AppendChunk(writer, suffix)
+			}
+		} else {
+			state.AppendChunk(writer, re.run)
+		}
+	}
+
+	if insertRunIdx == len(runs) {
+		// Append at end
+		state.AppendChunk(writer, Run[T]{Count: 1, Value: &value})
+	}
+
+	state.Flush(writer)
+	slabs := writer.Finish()
+	if len(slabs) == 0 {
+		slabs = []Slab{{}}
+	}
+	rleComputeMinMax(slabs, packer)
+
+	return SpliceResult{
+		Add:      1,
+		Del:      0,
+		Overflow: 0,
+		Group:    Acc{},
+		Slabs:    slabs,
+	}
+}
+
 // rleSplice performs a splice within a single RLE-encoded slab.
 // This is a simplified implementation that decodes → modifies → re-encodes.
 func rleSplice[T any](slab *Slab, index, del int, values []T, slabSize int, packer Packer[T], eq func(T, T) bool) SpliceResult {
+	// Fast path: inserting a single value with no deletions
+	if del == 0 && len(values) == 1 {
+		return rleSpliceInsertOne(slab, index, values[0], slabSize, packer, eq)
+	}
+
 	// Decode all values from the slab
 	decoded := rleDecodeAll(slab, packer)
 
@@ -238,27 +327,85 @@ func rleSplice[T any](slab *Slab, index, del int, values []T, slabSize int, pack
 	}
 }
 
+// rleIsAllNull checks if a slab contains only null values by inspecting the
+// encoded bytes. A single null run is encoded as sLEB128(0) + uLEB128(count).
+// Returns true only if the slab is a single null run covering all items.
+func rleIsAllNull(slab *Slab) bool {
+	data := slab.Bytes()
+	if len(data) == 0 {
+		return slab.Len() == 0
+	}
+	// Null run header: sLEB128(0) = byte 0x00
+	if data[0] != 0 {
+		return false
+	}
+	nullCount, off, err := encoding.ReadULEB128(data, 1)
+	if err != nil {
+		return false
+	}
+	return int(nullCount) == slab.Len() && off >= len(data)
+}
+
 // rleDecodeAll decodes all values from a slab into a slice of *T (nil for nulls).
+// Uses a batch backing array to reduce allocations from O(N) to O(1) per slab.
 func rleDecodeAll[T any](slab *Slab, packer Packer[T]) []*T {
 	var state rleCursorState
 	data := slab.Bytes()
-	result := make([]*T, 0, slab.Len())
+	n := slab.Len()
+	backing := make([]T, 0, n)
+	result := make([]*T, 0, n)
 
 	for {
 		run, err := rleNext(&state, data, packer)
 		if err != nil || run == nil {
 			break
 		}
-		for i := 0; i < run.Count; i++ {
-			if run.Value != nil {
-				v := *run.Value
-				result = append(result, &v)
-			} else {
+		if run.Value != nil {
+			for i := 0; i < run.Count; i++ {
+				backing = append(backing, *run.Value)
+				result = append(result, &backing[len(backing)-1])
+			}
+		} else {
+			for i := 0; i < run.Count; i++ {
 				result = append(result, nil)
 			}
 		}
 	}
 	return result
+}
+
+// rleDecodeFirst decodes only the first value from a slab.
+func rleDecodeFirst[T any](slab *Slab, packer Packer[T]) *T {
+	var state rleCursorState
+	data := slab.Bytes()
+	run, err := rleNext(&state, data, packer)
+	if err != nil || run == nil {
+		return nil
+	}
+	if run.Value != nil {
+		v := *run.Value
+		return &v
+	}
+	return nil
+}
+
+// rleDecodeAt decodes the value at the given offset within a slab.
+// For RLE, this walks runs until the target offset, then returns the run's value.
+// Zero allocations for null results; one allocation for non-null.
+func rleDecodeAt[T any](slab *Slab, offset int, packer Packer[T]) *T {
+	var state rleCursorState
+	data := slab.Bytes()
+	pos := 0
+	for {
+		run, err := rleNext(&state, data, packer)
+		if err != nil || run == nil {
+			return nil
+		}
+		if pos+run.Count > offset {
+			return run.Value // all items in a run share the same value
+		}
+		pos += run.Count
+	}
 }
 
 // rleEncode encodes values to bytes using RLE encoding.

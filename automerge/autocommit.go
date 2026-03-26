@@ -123,6 +123,30 @@ func (ac *AutoCommit) Mark(obj ObjId, start, end uint64, expand ExpandMark, name
 	return err
 }
 
+func (ac *AutoCommit) BatchCreateObject(obj ObjId, prop Prop, value HydrateValue, insert bool) (ObjId, error) {
+	id, err := ac.doc.BatchCreateObject(obj, prop, value, insert)
+	if err == nil {
+		ac.autoCommit()
+	}
+	return id, err
+}
+
+func (ac *AutoCommit) InitFromHydrate(value map[string]HydrateValue) error {
+	err := ac.doc.InitFromHydrate(value)
+	if err == nil {
+		ac.autoCommit()
+	}
+	return err
+}
+
+func (ac *AutoCommit) SpliceValues(obj ObjId, pos, del uint64, vals ...HydrateValue) error {
+	err := ac.doc.SpliceValues(obj, pos, del, vals...)
+	if err == nil {
+		ac.autoCommit()
+	}
+	return err
+}
+
 // --- ReadDoc (read) methods ---
 
 func (ac *AutoCommit) Get(obj ObjId, prop Prop) (Value, ExId, error) {

@@ -183,7 +183,9 @@ func (c *OpColumns) Export() columnar.RawColumns {
 	}
 
 	// Export in sorted spec order.
-	addCol(columnar.OpColObjActor, c.ObjActor.SaveToUnlessEmpty(nil))
+	// ObjActor uses SaveTo (not SaveToUnlessEmpty) because actor index 0 is a valid
+	// value that must be preserved; IsEmpty(0)==true would incorrectly drop the column.
+	addCol(columnar.OpColObjActor, c.ObjActor.SaveTo(nil))
 	addCol(columnar.OpColObjCtr, c.ObjCtr.SaveToUnlessEmpty(nil))
 	addCol(columnar.OpColKeyActor, c.KeyActor.SaveToUnlessEmpty(nil))
 	addCol(columnar.OpColKeyCtr, c.KeyCtr.SaveToUnlessEmpty(nil))
@@ -207,6 +209,79 @@ func (c *OpColumns) Export() columnar.RawColumns {
 	addCol(columnar.OpColMarkName, c.MarkName.SaveToUnlessEmpty(nil))
 
 	return cols
+}
+
+// SpliceOne inserts a single operation at the given position.
+// This is a fast path that avoids allocating intermediate pointer slices,
+// calling column.Splice directly with non-nullable values where possible.
+func (c *OpColumns) SpliceOne(pos int, op *Op) {
+	// IDActor, IDCtr — always non-null
+	c.IDActor.Splice(pos, 0, []uint64{uint64(op.ID.ActorIdx)})
+	c.IDCtr.Splice(pos, 0, []int64{int64(op.ID.Counter)})
+
+	// Obj — null for root
+	if op.Obj.IsRoot() {
+		c.ObjActor.SpliceNullable(pos, 0, []*uint64{nil})
+		c.ObjCtr.SpliceNullable(pos, 0, []*uint64{nil})
+	} else {
+		c.ObjActor.Splice(pos, 0, []uint64{uint64(op.Obj.ActorIdx)})
+		c.ObjCtr.Splice(pos, 0, []uint64{op.Obj.Counter})
+	}
+
+	// Key
+	if op.Key.Kind == KeyMap {
+		c.KeyActor.SpliceNullable(pos, 0, []*uint64{nil})
+		c.KeyCtr.SpliceNullable(pos, 0, []*int64{nil})
+		c.KeyStr.Splice(pos, 0, []string{op.Key.MapKey})
+	} else {
+		c.KeyStr.SpliceNullable(pos, 0, []*string{nil})
+		if op.Key.ElemID.IsZero() {
+			c.KeyActor.SpliceNullable(pos, 0, []*uint64{nil})
+			c.KeyCtr.SpliceNullable(pos, 0, []*int64{nil})
+		} else {
+			c.KeyActor.Splice(pos, 0, []uint64{uint64(op.Key.ElemID.ActorIdx)})
+			c.KeyCtr.Splice(pos, 0, []int64{int64(op.Key.ElemID.Counter)})
+		}
+	}
+
+	c.Insert.Splice(pos, 0, []bool{op.Insert})
+	c.Action.Splice(pos, 0, []uint64{uint64(op.Action)})
+
+	// Value: compute byte offset BEFORE splicing metadata
+	meta := encodeValueMeta(op.Value)
+	valuePos := c.ValueMeta.GetAcc(pos).AsInt()
+	c.ValueMeta.Splice(pos, 0, []uint64{meta})
+	vb := encodeValueBytes(op.Value)
+	if len(vb) > 0 {
+		rawItems := make([][]byte, len(vb))
+		for i, b := range vb {
+			rawItems[i] = []byte{b}
+		}
+		c.Value.Splice(valuePos, 0, rawItems)
+	}
+
+	// Succ: compute record offset BEFORE splicing count
+	sc := uint64(len(op.Succ))
+	succPos := c.SuccCount.GetAcc(pos).AsInt()
+	c.SuccCount.Splice(pos, 0, []uint64{sc})
+	if len(op.Succ) > 0 {
+		actors := make([]uint64, len(op.Succ))
+		ctrs := make([]int64, len(op.Succ))
+		for i, s := range op.Succ {
+			actors[i] = uint64(s.ActorIdx)
+			ctrs[i] = int64(s.Counter)
+		}
+		c.SuccActor.Splice(succPos, 0, actors)
+		c.SuccCtr.Splice(succPos, 0, ctrs)
+	}
+
+	// Marks
+	if op.MarkName != "" {
+		c.MarkName.Splice(pos, 0, []string{op.MarkName})
+	} else {
+		c.MarkName.SpliceNullable(pos, 0, []*string{nil})
+	}
+	c.Expand.Splice(pos, 0, []bool{op.Expand})
 }
 
 // Splice inserts operations at the given position. Returns the number of ops inserted.

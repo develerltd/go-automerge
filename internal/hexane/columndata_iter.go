@@ -1,5 +1,16 @@
 package hexane
 
+import "sync"
+
+// accSlicePool pools []Acc buffers used by ColumnDataIter.decodeSlab.
+// Typical slab size is 64 items, so we pool slices with capacity 65.
+var accSlicePool = sync.Pool{
+	New: func() any {
+		s := make([]Acc, 0, 65)
+		return &s
+	},
+}
+
 // ColumnDataIter is a forward iterator over a ColumnData column.
 //
 // It decodes one slab at a time, caching decoded values for efficient sequential access.
@@ -60,14 +71,32 @@ func (c *ColumnData[T]) newIter(pos, max int) *ColumnDataIter[T] {
 }
 
 // decodeSlab decodes the current slab's values and precomputes cumulative acc.
+// Uses sync.Pool for the []Acc buffer to reduce allocations.
 func (it *ColumnDataIter[T]) decodeSlab() {
+	// Return previous acc buffer to pool
+	if it.decodedAcc != nil {
+		buf := it.decodedAcc[:0]
+		accSlicePool.Put(&buf)
+		it.decodedAcc = nil
+	}
+
 	if it.currentSlab == nil {
 		it.decoded = nil
-		it.decodedAcc = nil
 		return
 	}
 	it.decoded = it.col.ops.DecodeAll(it.currentSlab)
-	it.decodedAcc = make([]Acc, len(it.decoded)+1)
+	n := len(it.decoded) + 1
+
+	// Get acc buffer from pool
+	bufPtr := accSlicePool.Get().(*[]Acc)
+	buf := *bufPtr
+	if cap(buf) >= n {
+		it.decodedAcc = buf[:n]
+	} else {
+		it.decodedAcc = make([]Acc, n)
+	}
+	it.decodedAcc[0] = Acc{}
+
 	packer := it.col.ops.Packer
 	for i, v := range it.decoded {
 		if v != nil {
@@ -370,10 +399,13 @@ func ResumeColumnDataIter[T any](col *ColumnData[T], state ColumnDataIterState) 
 
 // --- SeekToValue ---
 
-// SeekToValue performs a binary search for value within [rangeStart, rangeEnd).
-// Values in that range must be sorted. Returns the contiguous index range where
-// value appears, or an empty range at the insertion point.
-// After returning, the iterator is positioned at the start of the range.
+// SeekToValue finds the contiguous range of value within [rangeStart, rangeEnd).
+// Values in that range must be sorted. Returns (start, end) of the matching range,
+// or an empty range if not found.
+// After returning, the iterator is positioned at start of the matching range.
+//
+// When CompareValue is available (ordered types), uses O(log n) binary search on
+// the slab tree to skip to the right neighborhood before linear scanning.
 func (it *ColumnDataIter[T]) SeekToValue(value *T, rangeStart, rangeEnd int) (int, int) {
 	if rangeEnd > it.max {
 		rangeEnd = it.max
@@ -383,7 +415,15 @@ func (it *ColumnDataIter[T]) SeekToValue(value *T, rangeStart, rangeEnd int) (in
 		it.AdvanceTo(rangeStart)
 	}
 
-	// Linear scan through values looking for the range
+	// Binary search optimization: skip slabs that can't contain the target
+	cmp := it.col.ops.CompareValue
+	if cmp != nil {
+		if slabIdx, ok := it.binarySearchForSlab(value, rangeEnd); ok {
+			it.resetToSlabIndex(slabIdx)
+		}
+	}
+
+	// Linear scan for exact boundaries
 	foundStart := -1
 	foundEnd := it.pos
 
@@ -396,39 +436,134 @@ func (it *ColumnDataIter[T]) SeekToValue(value *T, rangeStart, rangeEnd int) (in
 
 		for it.decIdx < len(it.decoded) && it.pos < rangeEnd {
 			v := it.decoded[it.decIdx]
-			eq := it.col.ops.EqualValue(v, value)
 
-			if eq {
-				if foundStart < 0 {
-					foundStart = it.pos
+			if cmp != nil {
+				c := cmp(v, value)
+				if c == 0 {
+					if foundStart < 0 {
+						foundStart = it.pos
+					}
+					foundEnd = it.pos + 1
+				} else if c > 0 {
+					// Past the matching range (sorted)
+					goto done
 				}
-				foundEnd = it.pos + 1
-			} else if foundStart >= 0 {
-				// Past the matching range
-				break
+			} else {
+				if it.col.ops.EqualValue(v, value) {
+					if foundStart < 0 {
+						foundStart = it.pos
+					}
+					foundEnd = it.pos + 1
+				} else if foundStart >= 0 {
+					goto done
+				}
 			}
 
 			it.decIdx++
 			it.pos++
 		}
-
-		if foundStart >= 0 && foundEnd < it.pos {
-			break
-		}
 	}
 
+done:
 	if foundStart < 0 {
-		// Not found — return empty range at current position
 		p := it.pos
 		return p, p
 	}
 
-	// Reposition iterator to foundStart
 	if it.pos != foundStart {
 		it.seekToPos(foundStart)
 	}
 
 	return foundStart, foundEnd
+}
+
+// binarySearchForSlab performs a binary search on the slab tree to find the last
+// slab whose first value is less than the target. Returns the slab index to reset
+// to, or (0, false) if the target is in the current slab.
+//
+// This mirrors upstream Rust hexane's binary_search_for: it uses the first decoded
+// value of each slab as the search key, giving O(log n) slab-level seeking.
+func (it *ColumnDataIter[T]) binarySearchForSlab(target *T, maxPos int) (int, bool) {
+	col := it.col
+	cmp := col.ops.CompareValue
+
+	originalSlabIdx := it.slabIdx - 1
+	if originalSlabIdx < 0 {
+		originalSlabIdx = 0
+	}
+
+	// Use DecodeFirst when available (avoids allocating []*T slice)
+	decodeFirst := col.ops.DecodeFirst
+	if decodeFirst == nil {
+		// Fallback: decode all and take first
+		decodeFirst = func(slab *Slab) *T {
+			decoded := col.ops.DecodeAll(slab)
+			if len(decoded) == 0 {
+				return nil
+			}
+			return decoded[0]
+		}
+	}
+
+	// Check next slab's first value
+	nextSlab := col.slabs.Get(it.slabIdx)
+	if nextSlab == nil || nextSlab.Len() == 0 {
+		return 0, false
+	}
+	nextFirst := decodeFirst(nextSlab)
+
+	nextCmp := cmp(nextFirst, target)
+	if nextCmp > 0 {
+		return 0, false // target is before next slab
+	}
+	if nextCmp == 0 {
+		return 0, false // could be in current slab
+	}
+
+	// Find the slab containing maxPos
+	maxSlabCursor := col.slabs.GetWhereOrLast(func(accW, nextW SlabWeight) bool {
+		return maxPos < accW.Pos+nextW.Pos
+	})
+	if maxSlabCursor == nil {
+		return 0, false
+	}
+
+	start := originalSlabIdx
+	end := maxSlabCursor.Index
+	mid := (start + end + 1) / 2
+
+	for start < mid && mid < end {
+		midSlab := col.slabs.Get(mid)
+		if midSlab == nil {
+			break
+		}
+		midFirst := decodeFirst(midSlab)
+		if midFirst != nil && cmp(midFirst, target) < 0 {
+			start = mid
+		} else {
+			end = mid
+		}
+		mid = (start + end + 1) / 2
+	}
+
+	if start != originalSlabIdx {
+		return start, true
+	}
+	return 0, false
+}
+
+// resetToSlabIndex repositions the iterator to the beginning of the given slab.
+func (it *ColumnDataIter[T]) resetToSlabIndex(slabIdx int) {
+	cursor := it.col.slabs.GetCursor(slabIdx)
+	if cursor == nil {
+		return
+	}
+	it.slabIdx = cursor.Index + 1
+	it.preSlabAcc = cursor.Weight.Acc
+	it.preSlabPos = cursor.Weight.Pos
+	it.currentSlab = cursor.Element
+	it.decodeSlab()
+	it.pos = it.preSlabPos
 }
 
 // --- Adapter iterators ---
