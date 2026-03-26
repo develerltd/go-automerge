@@ -48,7 +48,9 @@ func TestDiffMapDelete(t *testing.T) {
 	doc.Commit("v1", 1000)
 	headsV1 := doc.Heads()
 
-	doc.Delete(Root, MapProp("y"))
+	if err := doc.Delete(Root, MapProp("y")); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("v2", 2000)
 	headsV2 := doc.Heads()
 

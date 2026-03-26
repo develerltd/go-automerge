@@ -86,16 +86,22 @@ func TestSyncOneWay(t *testing.T) {
 func TestSyncBidirectional(t *testing.T) {
 	// Start from a common state
 	doc1 := New()
-	doc1.Put(Root, "x", NewInt(1))
+	if err := doc1.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("initial", 1000)
 
 	doc2 := doc1.Fork()
 
 	// Both make changes
-	doc1.Put(Root, "a", NewStr("from doc1"))
+	if err := doc1.Put(Root, "a", NewStr("from doc1")); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("doc1 change", 2000)
 
-	doc2.Put(Root, "b", NewStr("from doc2"))
+	if err := doc2.Put(Root, "b", NewStr("from doc2")); err != nil {
+		t.Fatal(err)
+	}
 	doc2.Commit("doc2 change", 2000)
 
 	state1 := NewSyncState()
@@ -152,10 +158,14 @@ func TestSyncAlreadySynced(t *testing.T) {
 	if msg == nil {
 		return // already knows it's in sync
 	}
-	doc2.ReceiveSyncMessage(state2, msg)
+	if err := doc2.ReceiveSyncMessage(state2, msg); err != nil {
+		t.Fatal(err)
+	}
 	msg2 := doc2.GenerateSyncMessage(state2)
 	if msg2 != nil {
-		doc1.ReceiveSyncMessage(state1, msg2)
+		if err := doc1.ReceiveSyncMessage(state1, msg2); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// Should converge

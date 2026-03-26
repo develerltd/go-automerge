@@ -6,11 +6,6 @@ import (
 
 // --- Helper functions ---
 
-func uint64Ptr(v uint64) *uint64 { return &v }
-func int64Ptr(v int64) *int64    { return &v }
-func boolPtr(v bool) *bool       { return &v }
-func strPtr(v string) *string    { return &v }
-
 func assertSlice[T comparable](t *testing.T, got []*T, want []any) {
 	t.Helper()
 	if len(got) != len(want) {

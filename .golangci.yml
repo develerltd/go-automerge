@@ -1,0 +1,12 @@
+linters-settings:
+  errcheck:
+    check-type-assertions: false
+    check-blank: false
+
+issues:
+  exclude-rules:
+    # Test files: don't require error checks on Doc mutation methods used in setup.
+    # These calls panic on error in practice and checking each one adds noise.
+    - path: _test\.go
+      linters:
+        - errcheck

@@ -51,30 +51,12 @@ func boolNext(state *boolCursorState, data []byte) (*Run[bool], error) {
 	}
 }
 
-// boolSeek seeks to the given index within a boolean slab.
-func boolSeek(slab *Slab, index int) (*Run[bool], boolCursorState) {
-	var state boolCursorState
-	if index == 0 {
-		return nil, state
-	}
-	data := slab.Bytes()
-	for {
-		run, err := boolNext(&state, data)
-		if err != nil || run == nil {
-			panic("boolSeek: index out of bounds")
-		}
-		if state.index >= index {
-			return run, state
-		}
-	}
-}
-
 // boolLoad parses raw boolean-encoded bytes into slabs.
 func boolLoad(data []byte, slabSize int) ([]Slab, int, error) {
 	var state boolCursorState
 	var lastState boolCursorState
+	var lastCopy boolCursorState // tracks the cursor state at the last copy/slab-break point
 	writer := NewSlabWriter[bool](BoolPacker{}, slabSize, true)
-	var lastOffset int
 
 	for {
 		run, err := boolTryNext(&state, data)
@@ -85,26 +67,23 @@ func boolLoad(data []byte, slabSize int) ([]Slab, int, error) {
 			break
 		}
 
-		if state.offset-lastOffset >= slabSize {
+		if state.offset-lastCopy.offset >= slabSize {
 			// For boolean, break on false boundaries to keep alternating pattern clean
 			if !state.value { // just read a true run, so current state.value is now false
-				boolCopyRange(data, writer, lastOffset, state.offset, lastState.index, state.index, lastState.acc, state.acc)
+				boolCopyRange(data, writer, lastCopy.offset, state.offset, lastCopy.index, state.index, lastCopy.acc, state.acc)
 				writer.ManualSlabBreak()
-				lastOffset = state.offset
-				lastState = state
+				lastCopy = state
 			} else {
-				boolCopyRange(data, writer, lastOffset, lastState.offset, 0, lastState.index-lastState.index, Acc{}, lastState.acc)
+				boolCopyRange(data, writer, lastCopy.offset, lastState.offset, lastCopy.index, lastState.index, lastCopy.acc, lastState.acc)
 				writer.ManualSlabBreak()
-				lastOffset = lastState.offset
+				lastCopy = lastState
 			}
 		}
 		lastState = state
 	}
 
 	// Copy remaining
-	if lastOffset < state.offset {
-		boolCopyRange(data, writer, lastOffset, state.offset, 0, state.index, Acc{}, state.acc)
-	}
+	boolCopyRange(data, writer, lastCopy.offset, state.offset, lastCopy.index, state.index, lastCopy.acc, state.acc)
 
 	slabs := writer.Finish()
 	return slabs, state.index, nil

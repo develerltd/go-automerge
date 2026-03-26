@@ -155,19 +155,27 @@ func TestListItemsAt(t *testing.T) {
 func TestGetAllAt(t *testing.T) {
 	// Create a conflict at key "x" using two forked docs
 	doc1 := New()
-	doc1.Put(Root, "x", NewInt(1))
+	if err := doc1.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("v1", 1000)
 	headsV1 := doc1.Heads()
 
 	doc2 := doc1.Fork()
 
-	doc1.Put(Root, "x", NewInt(10))
+	if err := doc1.Put(Root, "x", NewInt(10)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("d1", 2000)
 
-	doc2.Put(Root, "x", NewInt(20))
+	if err := doc2.Put(Root, "x", NewInt(20)); err != nil {
+		t.Fatal(err)
+	}
 	doc2.Commit("d2", 2000)
 
-	doc1.Merge(doc2)
+	if err := doc1.Merge(doc2); err != nil {
+		t.Fatal(err)
+	}
 
 	// At v1: only one value
 	vals, err := doc1.GetAllAt(Root, MapProp("x"), headsV1)
@@ -195,7 +203,9 @@ func TestDeletedKeyAt(t *testing.T) {
 	doc.Commit("v1", 1000)
 	headsV1 := doc.Heads()
 
-	doc.Delete(Root, MapProp("y"))
+	if err := doc.Delete(Root, MapProp("y")); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("v2", 2000)
 
 	keys := doc.KeysAt(Root, headsV1)

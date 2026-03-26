@@ -124,25 +124,6 @@ func rleNext[T any](state *rleCursorState, data []byte, packer Packer[T]) (*Run[
 	}
 }
 
-// rleSeek seeks to the given index within a slab, returning the run containing that index.
-// Returns (nil, cursor) if index == 0.
-func rleSeek[T any](slab *Slab, index int, packer Packer[T]) (*Run[T], rleCursorState) {
-	var state rleCursorState
-	if index == 0 {
-		return nil, state
-	}
-	data := slab.Bytes()
-	for {
-		run, err := rleNext(&state, data, packer)
-		if err != nil || run == nil {
-			panic("rleSeek: index out of bounds")
-		}
-		if state.index >= index {
-			return run, state
-		}
-	}
-}
-
 // rleLoad parses raw RLE-encoded bytes into slabs.
 // Returns the slabs and total item count.
 func rleLoad[T any](data []byte, slabSize int, packer Packer[T]) ([]Slab, int, error) {

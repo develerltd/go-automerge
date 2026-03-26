@@ -224,29 +224,6 @@ func mapActor(localIdx uint32, mapping []uint32) uint32 {
 	return localIdx
 }
 
-// rebuildSuccessors rebuilds Succ from Pred on all ops in the OpSet.
-// Used after applying changes where ops have Pred but need Succ.
-func rebuildSuccessors(os *opset.OpSet) {
-	ops := os.AllOps()
-	opset.DeriveSuccFromPred(ops)
-	os.RebuildFromOps(ops)
-}
-
-// ensureActorIdx ensures the document's actor is in the actors table and sets actorIdx.
-func (d *Doc) ensureActorIdx() {
-	if len(d.actors) == 0 {
-		actor := NewActorId()
-		d.actors = append(d.actors, actor)
-		d.actorIdx = 0
-		return
-	}
-	// actorIdx should already be set from New/NewWithActorId or we need to add the actor
-	// For loaded docs, we add a new actor on first mutation
-	if d.actorIdx == 0 && d.nextOp > 1 {
-		// Already loaded, need to check if we have an actor set up
-		// actorIdx 0 is fine if it was set during load
-	}
-}
 
 // allocOpId allocates the next operation ID.
 func (d *Doc) allocOpId() OpId {

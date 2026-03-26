@@ -529,12 +529,24 @@ func TestCrossImplDoubleRoundTrip(t *testing.T) {
 func TestCrossImplGoCreateRoundTrip(t *testing.T) {
 	t.Run("scalars", func(t *testing.T) {
 		doc := New()
-		doc.Put(Root, "str", NewStr("hello"))
-		doc.Put(Root, "int", NewInt(-99))
-		doc.Put(Root, "uint", NewUint(42))
-		doc.Put(Root, "float", NewFloat64(2.718))
-		doc.Put(Root, "bool", NewBool(true))
-		doc.Put(Root, "bytes", NewBytes([]byte{1, 2, 3}))
+		if err := doc.Put(Root, "str", NewStr("hello")); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "int", NewInt(-99)); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "uint", NewUint(42)); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "float", NewFloat64(2.718)); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "bool", NewBool(true)); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "bytes", NewBytes([]byte{1, 2, 3})); err != nil {
+			t.Fatal(err)
+		}
 		doc.Commit("test", 1000)
 
 		data, err := doc.Save()
@@ -564,10 +576,16 @@ func TestCrossImplGoCreateRoundTrip(t *testing.T) {
 	t.Run("nested_objects", func(t *testing.T) {
 		doc := New()
 		mapId, _ := doc.PutObject(Root, "config", ObjTypeMap)
-		doc.Put(mapId, "x", NewInt(1))
+		if err := doc.Put(mapId, "x", NewInt(1)); err != nil {
+			t.Fatal(err)
+		}
 		listId, _ := doc.PutObject(Root, "items", ObjTypeList)
-		doc.Insert(listId, 0, NewStr("a"))
-		doc.Insert(listId, 1, NewStr("b"))
+		if err := doc.Insert(listId, 0, NewStr("a")); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Insert(listId, 1, NewStr("b")); err != nil {
+			t.Fatal(err)
+		}
 		doc.Commit("test", 1000)
 
 		data, _ := doc.Save()
@@ -591,7 +609,9 @@ func TestCrossImplGoCreateRoundTrip(t *testing.T) {
 	t.Run("text", func(t *testing.T) {
 		doc := New()
 		textId, _ := doc.PutObject(Root, "notes", ObjTypeText)
-		doc.SpliceText(textId, 0, 0, "Hello World")
+		if err := doc.SpliceText(textId, 0, 0, "Hello World"); err != nil {
+			t.Fatal(err)
+		}
 		doc.Commit("test", 1000)
 
 		data, _ := doc.Save()
@@ -672,15 +692,27 @@ func TestCrossImplRustCLIVerify(t *testing.T) {
 	// Also test Go-created documents
 	t.Run("go_created", func(t *testing.T) {
 		doc := New()
-		doc.Put(Root, "name", NewStr("test"))
-		doc.Put(Root, "value", NewInt(42))
+		if err := doc.Put(Root, "name", NewStr("test")); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Put(Root, "value", NewInt(42)); err != nil {
+			t.Fatal(err)
+		}
 		mapId, _ := doc.PutObject(Root, "nested", ObjTypeMap)
-		doc.Put(mapId, "x", NewBool(true))
+		if err := doc.Put(mapId, "x", NewBool(true)); err != nil {
+			t.Fatal(err)
+		}
 		listId, _ := doc.PutObject(Root, "items", ObjTypeList)
-		doc.Insert(listId, 0, NewStr("a"))
-		doc.Insert(listId, 1, NewStr("b"))
+		if err := doc.Insert(listId, 0, NewStr("a")); err != nil {
+			t.Fatal(err)
+		}
+		if err := doc.Insert(listId, 1, NewStr("b")); err != nil {
+			t.Fatal(err)
+		}
 		textId, _ := doc.PutObject(Root, "notes", ObjTypeText)
-		doc.SpliceText(textId, 0, 0, "Hello World")
+		if err := doc.SpliceText(textId, 0, 0, "Hello World"); err != nil {
+			t.Fatal(err)
+		}
 		doc.Commit("test", 1000)
 
 		saved, err := doc.Save()

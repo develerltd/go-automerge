@@ -7,7 +7,9 @@ import (
 func TestCursorBasic(t *testing.T) {
 	doc := New()
 	textObj, _ := doc.PutObject(Root, "text", ObjTypeText)
-	doc.SpliceText(textObj, 0, 0, "hello")
+	if err := doc.SpliceText(textObj, 0, 0, "hello"); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("text", 1000)
 
 	// Get cursor at position 2
@@ -33,7 +35,9 @@ func TestCursorBasic(t *testing.T) {
 func TestCursorStartEnd(t *testing.T) {
 	doc := New()
 	textObj, _ := doc.PutObject(Root, "text", ObjTypeText)
-	doc.SpliceText(textObj, 0, 0, "abc")
+	if err := doc.SpliceText(textObj, 0, 0, "abc"); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("text", 1000)
 
 	pos, err := doc.GetCursorPosition(textObj, StartCursor())
@@ -56,7 +60,9 @@ func TestCursorStartEnd(t *testing.T) {
 func TestCursorBytesRoundTrip(t *testing.T) {
 	doc := New()
 	textObj, _ := doc.PutObject(Root, "text", ObjTypeText)
-	doc.SpliceText(textObj, 0, 0, "test")
+	if err := doc.SpliceText(textObj, 0, 0, "test"); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("text", 1000)
 
 	cursor, err := doc.GetCursor(textObj, 1, MoveAfter)
@@ -121,7 +127,9 @@ func TestCursorStartEndBytes(t *testing.T) {
 
 func TestCursorOnNonSequence(t *testing.T) {
 	doc := New()
-	doc.Put(Root, "x", NewInt(1))
+	if err := doc.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("v1", 1000)
 
 	_, err := doc.GetCursor(Root, 0, MoveAfter)

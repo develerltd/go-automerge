@@ -39,14 +39,21 @@ jobs:
 
       - name: Clone upstream automerge
         run: |
+          rm -rf upstream-automerge
           git clone --no-checkout "$UPSTREAM_REPO" upstream-automerge
           cd upstream-automerge
           git checkout "$UPSTREAM_COMMIT"
 
+      - name: Install fixture-gen into upstream tree
+        run: |
+          cp -r testutil/fixture-gen upstream-automerge/rust/fixture-gen
+          sed -i 's|path = "../../rust/automerge"|path = "../automerge"|' upstream-automerge/rust/fixture-gen/Cargo.toml
+          sed -i 's/^members = \[/members = [\n    "fixture-gen",/' upstream-automerge/rust/Cargo.toml
+
       - name: Build fixture-gen
         run: |
           cd upstream-automerge/rust
-          cargo build --release --manifest-path fixture-gen/Cargo.toml
+          cargo build --release -p fixture-gen
 
       - name: Build automerge CLI
         run: |

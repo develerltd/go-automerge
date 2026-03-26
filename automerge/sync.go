@@ -126,13 +126,6 @@ func (d *Doc) ReceiveSyncMessage(state *SyncState, msg *gosync.Message) error {
 		}
 	}
 
-	// Clean sent_hashes: remove hashes they now have
-	for h := range state.SentHashes {
-		if d.hasChangeHash(h) {
-			// Keep it — they may still not have it
-		}
-	}
-
 	return nil
 }
 

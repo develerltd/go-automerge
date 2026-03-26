@@ -260,8 +260,12 @@ func TestPutObject(t *testing.T) {
 func TestDelete(t *testing.T) {
 	doc := New()
 
-	doc.Put(Root, "a", NewStr("hello"))
-	doc.Put(Root, "b", NewStr("world"))
+	if err := doc.Put(Root, "a", NewStr("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Put(Root, "b", NewStr("world")); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := doc.Delete(Root, MapProp("a")); err != nil {
 		t.Fatal(err)
@@ -367,9 +371,15 @@ func TestSaveLoadNestedObjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc.Insert(listId, 0, NewStr("first"))
-	doc.Insert(listId, 1, NewStr("second"))
-	doc.Insert(listId, 2, NewStr("third"))
+	if err := doc.Insert(listId, 0, NewStr("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Insert(listId, 1, NewStr("second")); err != nil {
+		t.Fatal(err)
+	}
+	if err := doc.Insert(listId, 2, NewStr("third")); err != nil {
+		t.Fatal(err)
+	}
 
 	doc.Commit("nested", 2000)
 
@@ -432,7 +442,9 @@ func TestSaveLoadText(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	doc.SpliceText(textId, 0, 0, "Hello World")
+	if err := doc.SpliceText(textId, 0, 0, "Hello World"); err != nil {
+		t.Fatal(err)
+	}
 	doc.Commit("add text", 3000)
 
 	data, err := doc.Save()
@@ -540,7 +552,9 @@ func TestFork(t *testing.T) {
 	}
 
 	// Mutating forked should not affect original
-	forked.Put(Root, "y", NewInt(2))
+	if err := forked.Put(Root, "y", NewInt(2)); err != nil {
+		t.Fatal(err)
+	}
 	_, _, err := doc.Get(Root, MapProp("y"))
 	if err != ErrNotFound {
 		t.Errorf("original should not have y after fork mutation")
@@ -554,16 +568,22 @@ func TestFork(t *testing.T) {
 
 func TestMerge(t *testing.T) {
 	doc1 := New()
-	doc1.Put(Root, "x", NewInt(1))
+	if err := doc1.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("v1", 1000)
 
 	doc2 := doc1.Fork()
 
 	// Diverge
-	doc1.Put(Root, "a", NewStr("from doc1"))
+	if err := doc1.Put(Root, "a", NewStr("from doc1")); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("doc1 change", 2000)
 
-	doc2.Put(Root, "b", NewStr("from doc2"))
+	if err := doc2.Put(Root, "b", NewStr("from doc2")); err != nil {
+		t.Fatal(err)
+	}
 	doc2.Commit("doc2 change", 2000)
 
 	// Merge doc2 into doc1
@@ -588,16 +608,22 @@ func TestMerge(t *testing.T) {
 
 func TestMergeConflict(t *testing.T) {
 	doc1 := New()
-	doc1.Put(Root, "x", NewInt(1))
+	if err := doc1.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("v1", 1000)
 
 	doc2 := doc1.Fork()
 
 	// Both modify the same key
-	doc1.Put(Root, "x", NewInt(2))
+	if err := doc1.Put(Root, "x", NewInt(2)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("doc1", 2000)
 
-	doc2.Put(Root, "x", NewInt(3))
+	if err := doc2.Put(Root, "x", NewInt(3)); err != nil {
+		t.Fatal(err)
+	}
 	doc2.Commit("doc2", 2000)
 
 	if err := doc1.Merge(doc2); err != nil {
@@ -619,15 +645,23 @@ func TestMergeConflict(t *testing.T) {
 
 func TestMergeRoundTrip(t *testing.T) {
 	doc1 := New()
-	doc1.Put(Root, "x", NewInt(1))
+	if err := doc1.Put(Root, "x", NewInt(1)); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("v1", 1000)
 
 	doc2 := doc1.Fork()
-	doc1.Put(Root, "a", NewStr("hello"))
+	if err := doc1.Put(Root, "a", NewStr("hello")); err != nil {
+		t.Fatal(err)
+	}
 	doc1.Commit("c1", 2000)
-	doc2.Put(Root, "b", NewStr("world"))
+	if err := doc2.Put(Root, "b", NewStr("world")); err != nil {
+		t.Fatal(err)
+	}
 	doc2.Commit("c2", 2000)
-	doc1.Merge(doc2)
+	if err := doc1.Merge(doc2); err != nil {
+		t.Fatal(err)
+	}
 
 	// Save and reload
 	data, _ := doc1.Save()
@@ -686,7 +720,9 @@ func TestSplice(t *testing.T) {
 	doc.Insert(listId, 2, NewStr("c"))
 
 	// Replace "b" with "x", "y"
-	doc.Splice(listId, 1, 1, NewStr("x"), NewStr("y"))
+	if err := doc.Splice(listId, 1, 1, NewStr("x"), NewStr("y")); err != nil {
+		t.Fatal(err)
+	}
 
 	var items []string
 	for _, v := range doc.ListItems(listId) {

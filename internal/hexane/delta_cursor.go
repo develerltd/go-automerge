@@ -55,24 +55,6 @@ func deltaNext(state *deltaCursorState, data []byte) (*Run[int64], error) {
 	}
 }
 
-// deltaSeek seeks to the given index within a delta-encoded slab.
-func deltaSeek(slab *Slab, index int) (*Run[int64], deltaCursorState) {
-	state := deltaCursorState{abs: slab.Abs()}
-	if index == 0 {
-		return nil, state
-	}
-	data := slab.Bytes()
-	for {
-		run, err := deltaNext(&state, data)
-		if err != nil || run == nil {
-			panic("deltaSeek: index out of bounds")
-		}
-		if state.rle.index >= index {
-			return run, state
-		}
-	}
-}
-
 // deltaLoad parses raw delta-encoded bytes into slabs.
 func deltaLoad(data []byte, slabSize int) ([]Slab, int, error) {
 	var state deltaCursorState

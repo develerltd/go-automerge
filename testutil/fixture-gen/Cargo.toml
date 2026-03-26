@@ -1,0 +1,11 @@
+[package]
+name = "fixture-gen"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fixture-gen"
+path = "src/main.rs"
+
+[dependencies]
+automerge = { path = "../../rust/automerge" }
